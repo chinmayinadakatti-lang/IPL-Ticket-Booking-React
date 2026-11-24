@@ -1,49 +1,60 @@
 
-import { useState } from "react";
+import { useState, useEffect } from "react";
+import { supabase } from "./supabase";
 import Navbar from "./components/Navbar";
 import Hero from "./components/Hero";
 import MatchCard from "./components/MatchCard";
 import "./App.css";
 
 function App() {
-
     const [search, setSearch] = useState("");
+    const [matches, setMatches] = useState([]);
     const [selectedMatch, setSelectedMatch] = useState(null);
+
     const [customerName, setCustomerName] = useState("");
     const [customerEmail, setCustomerEmail] = useState("");
     const [tickets, setTickets] = useState(1);
-    const [bookingMessage, setBookingMessage] = useState("");
 
-    const matches = [
-        {
-            id: 1,
-            team1: "RCB",
-            team2: "CSK",
-            date: "25 April 2026",
-            venue: "Bengaluru"
-        },
-        {
-            id: 2,
-            team1: "MI",
-            team2: "KKR",
-            date: "27 April 2026",
-            venue: "Mumbai"
-        },
-        {
-            id: 3,
-            team1: "RCB",
-            team2: "MI",
-            date: "30 April 2026",
-            venue: "Bengaluru"
-        },
-        {
-            id: 4,
-            team1: "CSK",
-            team2: "SRH",
-            date: "2 May 2026",
-            venue: "Chennai"
+    const [bookingMessage, setBookingMessage] = useState("");
+    const [messageType, setMessageType] = useState("");
+    const [loading, setLoading] = useState(true);
+    const [bookingLoading, setBookingLoading] = useState(false);
+
+    // Fetch matches from Supabase
+    async function fetchMatches() {
+        setLoading(true);
+
+        const { data, error } = await supabase
+            .from("matches")
+            .select("*")
+            .order("match_date", { ascending: true });
+
+        if (error) {
+            console.error(
+                "SUPABASE ERROR:",
+                JSON.stringify(error, null, 2)
+            );
+
+            setBookingMessage(
+                "Database error: " + error.message +
+                (error.hint ? " | " + error.hint : "") +
+                (error.details ? " | " + error.details : "")
+            );
+
+            setMessageType("error");
+            setMatches([]);
+        } else {
+            setMatches(data || []);
+            setBookingMessage("");
+            setMessageType("");
         }
-    ];
+
+        setLoading(false);
+    }
+
+    useEffect(() => {
+        fetchMatches();
+    }, []);
 
     // Search matches
     const filteredMatches = matches.filter((match) =>
@@ -56,6 +67,7 @@ function App() {
     function handleBooking(match) {
         setSelectedMatch(match);
         setBookingMessage("");
+        setMessageType("");
         setCustomerName("");
         setCustomerEmail("");
         setTickets(1);
@@ -68,21 +80,67 @@ function App() {
     }
 
     // Confirm booking
-    function handleSubmit(event) {
+    async function handleSubmit(event) {
         event.preventDefault();
+
+        if (!selectedMatch) return;
+
+        if (tickets < 1 || tickets > 10) {
+            setBookingMessage("Please select between 1 and 10 tickets.");
+            setMessageType("error");
+            return;
+        }
+
+        setBookingLoading(true);
+        setBookingMessage("");
+
+        const { data, error } = await supabase.rpc("book_ipl_tickets", {
+            p_match_id: selectedMatch.id,
+            p_customer_name: customerName,
+            p_email: customerEmail,
+            p_tickets: tickets
+        });
+
+        setBookingLoading(false);
+
+        if (error) {
+            console.error(
+                "BOOKING ERROR:",
+                JSON.stringify(error, null, 2)
+            );
+
+            setBookingMessage("Booking failed: " + error.message);
+            setMessageType("error");
+            return;
+        }
+
+        if (!data || data.success !== true) {
+            setBookingMessage(
+                data?.message || "Unable to complete your booking."
+            );
+            setMessageType("error");
+            return;
+        }
 
         setBookingMessage(
             "Thank you, " + customerName +
-            "! Your booking request for " +
+            "! Your booking for " +
             selectedMatch.team1 + " vs " +
             selectedMatch.team2 +
             " has been confirmed successfully."
         );
+
+        setMessageType("success");
+
+        setCustomerName("");
+        setCustomerEmail("");
+        setTickets(1);
+
+        await fetchMatches();
     }
 
     return (
         <div>
-
             <Navbar />
 
             <Hero />
@@ -99,26 +157,36 @@ function App() {
                     onChange={(e) => setSearch(e.target.value)}
                 />
 
-                <div className="match-container">
+                {loading ? (
+                    <p>Loading matches...</p>
+                ) : (
+                    <>
+                        {bookingMessage && messageType === "error" && (
+                            <p className="error-message">
+                                {bookingMessage}
+                            </p>
+                        )}
 
-                    {filteredMatches.length > 0 ? (
-                        filteredMatches.map((match) => (
-                            <MatchCard
-                                key={match.id}
-                                team1={match.team1}
-                                team2={match.team2}
-                                date={match.date}
-                                venue={match.venue}
-                                onBook={() => handleBooking(match)}
-                            />
-                        ))
-                    ) : (
-                        <p className="no-results">
-                            No matches found!
-                        </p>
-                    )}
-
-                </div>
+                        <div className="match-container">
+                            {filteredMatches.length > 0 ? (
+                                filteredMatches.map((match) => (
+                                    <MatchCard
+                                        key={match.id}
+                                        team1={match.team1}
+                                        team2={match.team2}
+                                        date={match.match_date}
+                                        venue={match.venue}
+                                        onBook={() => handleBooking(match)}
+                                    />
+                                ))
+                            ) : (
+                                <p className="no-results">
+                                    No matches found!
+                                </p>
+                            )}
+                        </div>
+                    </>
+                )}
 
             </section>
 
@@ -138,9 +206,13 @@ function App() {
                             {selectedMatch.team1} vs {selectedMatch.team2}
                         </h2>
 
-                        <p>Date: {selectedMatch.date}</p>
+                        <p>Date: {selectedMatch.match_date}</p>
 
                         <p>Venue: {selectedMatch.venue}</p>
+
+                        <p>
+                            Available Seats: {selectedMatch.available_seats}
+                        </p>
 
                         <label>Your Name</label>
 
@@ -171,7 +243,7 @@ function App() {
                         <input
                             type="number"
                             min="1"
-                            max="10"
+                            max={Math.min(10, selectedMatch.available_seats)}
                             value={tickets}
                             onChange={(e) =>
                                 setTickets(Number(e.target.value))
@@ -179,12 +251,22 @@ function App() {
                             required
                         />
 
-                        <button type="submit">
-                            Confirm Booking
+                        <button
+                            type="submit"
+                            disabled={
+                                bookingLoading ||
+                                selectedMatch.available_seats < 1
+                            }
+                        >
+                            {bookingLoading ? "Booking..." : "Confirm Booking"}
                         </button>
 
                         {bookingMessage && (
-                            <p className="success-message">
+                            <p className={
+                                messageType === "success"
+                                    ? "success-message"
+                                    : "error-message"
+                            }>
                                 {bookingMessage}
                             </p>
                         )}
@@ -216,7 +298,6 @@ function App() {
                 <p>© 2026 IPL Ticket Booking. All Rights Reserved.</p>
 
             </footer>
-
         </div>
     );
 }
